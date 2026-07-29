@@ -1,0 +1,27 @@
+# macOS / OS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Runtime artifacts produced by dispatch.sh (never commit)
+*.log
+*.err
+*.rc
+*.failures
+tasks.tsv
+*.tsv.failures
+
+# Backups / editor
+*.bak
+*.swp
+.vscode/
+.idea/
+
+# Local env / secrets
+.env
+.env.*

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300" role="img" aria-label="jcg-codex-mode-dispatch: main thread orchestrates, dispatch.sh fans out to Luna and Sol in parallel, then a Sol xhigh reduce verifies and synthesizes.">
+  <style>
+    .t-title { font: 700 27px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .t-sub   { font: 400 13px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #59636e; }
+    .n-txt   { font: 600 15px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #ffffff; }
+    .n-sub   { font: 400 11px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #ffffffcc; }
+    @media (prefers-color-scheme: dark) {
+      .t-title { fill: #f0f6fc; }
+      .t-sub   { fill: #9aa4af; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#656d76"/>
+    </marker>
+  </defs>
+
+  <text x="500" y="34" text-anchor="middle" class="t-title">jcg-codex-mode-dispatch</text>
+  <text x="500" y="56" text-anchor="middle" class="t-sub">parallel multi-model dispatch · accuracy &gt; latency &gt; cost · hidden by default</text>
+
+  <!-- edges -->
+  <g stroke="#656d76" stroke-width="2.5" fill="none" marker-end="url(#arrow)">
+    <path d="M160,160 L214,160"/>
+    <path d="M402,150 C440,150 440,82 476,82"/>
+    <path d="M402,170 C440,170 440,222 476,222"/>
+    <path d="M632,82 C672,82 672,150 714,150"/>
+    <path d="M632,222 C672,222 672,170 714,170"/>
+  </g>
+
+  <!-- nodes -->
+  <g>
+    <rect x="20"  y="130" width="140" height="60" rx="14" fill="#21262d"/>
+    <text x="90"  y="156" text-anchor="middle" class="n-txt">MAIN THREAD</text>
+    <text x="90"  y="174" text-anchor="middle" class="n-sub">orchestrate</text>
+
+    <rect x="220" y="130" width="182" height="60" rx="14" fill="#6e40c9"/>
+    <text x="311" y="156" text-anchor="middle" class="n-txt">dispatch.sh</text>
+    <text x="311" y="174" text-anchor="middle" class="n-sub">fifo pool · fail-closed</text>
+
+    <rect x="480" y="54"  width="152" height="56" rx="14" fill="#1f6feb"/>
+    <text x="556" y="79"  text-anchor="middle" class="n-txt">LUNA  ∥</text>
+    <text x="556" y="97"  text-anchor="middle" class="n-sub">verifiable only</text>
+
+    <rect x="480" y="194" width="152" height="56" rx="14" fill="#1f6feb"/>
+    <text x="556" y="219" text-anchor="middle" class="n-txt">SOL  ∥</text>
+    <text x="556" y="237" text-anchor="middle" class="n-sub">semantic / dual-run</text>
+
+    <rect x="718" y="130" width="262" height="60" rx="14" fill="#bf8700"/>
+    <text x="849" y="156" text-anchor="middle" class="n-txt">REDUCE · Sol xhigh</text>
+    <text x="849" y="174" text-anchor="middle" class="n-sub">verify · compare · QA · deliver</text>
+  </g>
+
+  <text x="500" y="288" text-anchor="middle" class="t-sub">Luna failover → Sol on any failure · per-subtask VERIFY · one writer per target</text>
+</svg>

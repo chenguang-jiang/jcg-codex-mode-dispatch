@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Contract tests (SKILL.md / README drift guards)
+        run: python3 skills/jcg-codex-mode-dispatch/tests/test_skill_contract.py
+
+      - name: Dispatch behavior tests (fifo pool / wave / fail-closed / failover)
+        run: bash skills/jcg-codex-mode-dispatch/tests/test_dispatch.sh
