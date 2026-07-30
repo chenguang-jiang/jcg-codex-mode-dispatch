@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Batch exec rule** (SKILL.md): merge 2–4 light independent subtasks (<15s each) into a single `codex exec` call, paying the startup tax only once. Cuts light-task scenarios by 40–70%.
+- **DAG dependency scheduling** (`DEPENDS_ON`, tsv column 9): tasks with declared file dependencies bypass the wave barrier and start as soon as their deps appear, eliminating bucket-effect waits on unrelated slow tasks.
+- **Speculative failover** (`SPECULATIVE_FAILOVER=1`, opt-in): launches a delayed Sol shadow in parallel with Luna; if Luna fails, the shadow is already running — total latency ≈ max(Luna, delay+Sol) instead of Luna+Sol.
+- **`EXTRA_EXEC_FLAGS`** env var: append arbitrary flags (e.g. `--ignore-user-config --ignore-rules`) to every `codex exec` call, letting users skip plugin/MCP loading to reduce startup time.
+
+### Changed
+- **Slim GUARD**: reduced from ~150 words to 3 high-impact rules (~80 words), lowering attention dilution and indirectly reducing failover trigger rate.
+- `wait_deps` poll interval reduced from 2s to 0.5s for tighter DAG scheduling.
+- `dispatch.sh` now reads 9 tsv columns (was 8); column 9 `DEPENDS_ON` is optional.
+- Behavior tests expanded from 6 to 8 cases (added DAG deps T7, speculative failover T8).
+- Contract tests expanded from 13 to 14 (added `test_perf_optimizations_documented`).
+
 ## [0.1.0] - 2026-07-29
 
 ### Added

@@ -8,7 +8,7 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT"></a>
   <img src="https://img.shields.io/badge/Codex%20CLI-%E2%89%A50.146-9b59b6.svg" alt="Codex CLI ≥ 0.146">
   <img src="https://img.shields.io/badge/Bash-3.2%2B-green.svg" alt="Bash 3.2+">
-  <img src="https://img.shields.io/badge/tests-19%20passing-brightgreen.svg" alt="19 tests passing">
+  <img src="https://img.shields.io/badge/tests-22%20passing-brightgreen.svg" alt="22 tests passing">
   <a href="https://github.com/chenguang-jiang/jcg-codex-mode-dispatch/actions/workflows/test.yml"><img src="https://github.com/chenguang-jiang/jcg-codex-mode-dispatch/actions/workflows/test.yml/badge.svg" alt="CI"></a>
 </p>
 
@@ -21,11 +21,11 @@
 
 | 套件 | 测试数 | 守护内容 |
 |---|---|---|
-| 契约 (`test_skill_contract.py`) | 13 | 优先级、路由表、七字段派发契约、启动门槛、GUARD、双语 README、仓库资产 |
-| 行为 (`test_dispatch.sh`) | 6 | 失败关闭中止、并行验证、验证失败收集、Luna→Sol 升档、波次屏障、并发上限 |
+| 契约 (`test_skill_contract.py`) | 14 | 优先级、路由表、派发契约、启动门槛、GUARD、性能优化、双语 README、仓库资产 |
+| 行为 (`test_dispatch.sh`) | 8 | 失败关闭中止、并行验证、验证失败收集、Luna→Sol 升档、波次屏障、并发上限、DAG 依赖、投机 failover |
 | 端到端 (真实 Codex CLI 0.146) | 1 | 3×Luna 并行 + Sol 归约，全部通过，`exit 0` |
 
-全部 19 项测试在每次 push 时由 [GitHub Actions](.github/workflows/test.yml) 自动运行。行为测试使用假 `codex` 桩——**零网络、零费用**。
+全部 22 项测试在每次 push 时由 [GitHub Actions](.github/workflows/test.yml) 自动运行。行为测试使用假 `codex` 桩——**零网络、零费用**。
 
 ## 这是什么
 
@@ -42,14 +42,14 @@
 ```mermaid
 flowchart LR
   U[用户任务] --> M[主线程<br/>启动门槛 · 拆解]
-  M --> D[dispatch.sh<br/>fifo 令牌池 · 波次屏障 · 失败关闭]
+  M --> D[dispatch.sh<br/>fifo 令牌池 · 波次/DAG · 失败关闭]
   D --> L1[🌙 Luna ∥]
   D --> L2[🌙 Luna ]
   D --> S1[☀️ Sol ∥]
   L1 --> V[逐子任务 VERIFY]
   L2 --> V
   S1 --> V
-  V -->|失败| FO[Luna → Sol 升档]
+  V -->|失败| FO[Luna → Sol 升档<br/>或投机 shadow]
   FO --> V
   V --> R[☀️ Sol · xhigh<br/>归约 · 双跑 · QA]
   R --> O[最终交付]
@@ -86,7 +86,9 @@ flowchart LR
 - **失败关闭**：空/非法模型 → `exit 2`，绝不静默回退。
 - **派发契约**（七字段）：`Outcome` / `Benefit` / `Sources` / `Scope` / `Checks` / `Stop when` / `Return`。
 - **逐子任务验证**：tsv 的 `VERIFY_CMD` 用 `$OUT`；rc 非零 = 失败。
-- **失败升档**：Luna 失败 → Sol/high 重跑（串行安全网，默认开）。
+- **失败升档**：Luna 失败 → Sol/high 重跑（串行安全网，默认开）。`SPECULATIVE_FAILOVER=1` 可并行启动延迟 Sol shadow——Luna 失败时 shadow 已在跑。
+- **DAG 依赖**（第 9 列 `DEPENDS_ON`）：声明了文件依赖的任务绕过波次屏障，依赖一出现就启动。
+- **轻任务合并**：2–4 个轻子任务（各 <15s）合并成一个 `codex exec` 调用，只付一次启动税。
 - **双跑**：一个子任务两行 luna+sol，归约时比对（并行冗余）。
 - **全新上下文**：无父上下文；缺来源不得编造。
 - **Reviewer 独立性**：不带先前争论/作者/期望结论。
@@ -130,7 +132,7 @@ bash    ~/.codex/skills/jcg-codex-mode-dispatch/tests/test_dispatch.sh
 `tasks.tsv` 列格式：
 
 ```text
-WAVE<TAB>MODEL<TAB>EFFORT<TAB>WORKDIR<TAB>OUTFILE<TAB>VERIFY_CMD<TAB>PROMPT[<TAB>SANDBOX]
+WAVE<TAB>MODEL<TAB>EFFORT<TAB>WORKDIR<TAB>OUTFILE<TAB>VERIFY_CMD<TAB>PROMPT[<TAB>SANDBOX[<TAB>DEPENDS_ON]]
 ```
 
 调试：各产物 `*.log` / `*.err`，运行级 `<tsv>.failures`。
@@ -142,6 +144,8 @@ WAVE<TAB>MODEL<TAB>EFFORT<TAB>WORKDIR<TAB>OUTFILE<TAB>VERIFY_CMD<TAB>PROMPT[<TAB
 | 路由 / effort / 优先级 | `SKILL.md` 模型角色表 + frontmatter `metadata` |
 | 允许模型白名单 | `scripts/dispatch.sh` 的 `ALLOWED_MODELS` |
 | 并发数 | 运行时 `MAX_CONCURRENCY=N`（默认 4） |
+| 投机 failover | `SPECULATIVE_FAILOVER=1` + `SPECULATIVE_DELAY=N`（默认 30s） |
+| 跳过插件加载 | `EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules"`（实验性） |
 | 逐任务超时 | `scripts/dispatch.sh` 里 `twrap 600` 的秒数 |
 | 子代理 GUARD | `scripts/dispatch.sh` 里的 `GUARD` 文本 |
 | 自动建议（不推荐） | 删 frontmatter 的 `disable-model-invocation: true` |
@@ -159,8 +163,8 @@ jcg-codex-mode-dispatch/
     ├── SKILL.md
     ├── scripts/dispatch.sh
     └── tests/
-        ├── test_skill_contract.py   (13 项断言)
-        └── test_dispatch.sh         (6 个行为测试)
+        ├── test_skill_contract.py   (14 项断言)
+        └── test_dispatch.sh         (8 个行为测试)
 ```
 
 ## 许可证

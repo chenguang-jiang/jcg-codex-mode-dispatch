@@ -77,13 +77,69 @@ metadata:
 
 1. **先过启动门槛**（见上文）：子任务<3 或有任一能主线程秒答 → **不启动 dispatch，直接主线程做**，并告知用户。通过后才进入拆解：把任务拆成独立子任务（无共享可变状态）；画依赖、分 WAVE（波内并行、波间串行）；标 stakes 与可校验性。预期 < ~60 秒的碎活**合并**，别单独 spawn（37s 启动税不值）。
 2. **指派**：按路由表给每个子任务定 model + effort + VERIFY_CMD，写 `tasks.tsv`：
-   列 = `WAVE<TAB>MODEL<TAB>EFFORT<TAB>WORKDIR<TAB>OUTFILE<TAB>VERIFY_CMD<TAB>PROMPT[<TAB>SANDBOX]`
+   列 = `WAVE<TAB>MODEL<TAB>EFFORT<TAB>WORKDIR<TAB>OUTFILE<TAB>VERIFY_CMD<TAB>PROMPT[<TAB>SANDBOX[<TAB>DEPENDS_ON]]`
    - `VERIFY_CMD` 可空；其内部可用 `$OUT`（= OUTFILE 路径）。
    - `SANDBOX` 可空（默认 `read-only`）；**写类子任务**（生成/改文件）填 `workspace-write`。
+   - `DEPENDS_ON` 可空；逗号分隔的 OUTFILE 路径——有此列的任务**绕过 wave barrier**，改为轮询等待依赖文件出现后立刻启动（DAG 模式，见下文）。
    - 双跑：同一子任务写两行（不同 MODEL/OUTFILE）。
 3. **派发**：`./scripts/dispatch.sh ./tasks.tsv`（`MAX_CONCURRENCY` 默认 4，无 429 再加）。
-   dispatch.sh：按波并行、并发上限（fifo 令牌池，bash 3.2 兼容，**不用 `wait -n`**）、单任务超时（gtimeout/timeout 自动探测，无则跳过）、跑每个 VERIFY_CMD、Luna→Sol 失败升档、写 `<tsv>.failures`。
+   dispatch.sh：按波并行、DAG 依赖调度、并发上限（fifo 令牌池，bash 3.2 兼容，**不用 `wait -n`**）、单任务超时（gtimeout/timeout 自动探测，无则跳过）、跑每个 VERIFY_CMD、Luna→Sol 失败升档、投机 failover（opt-in）、写 `<tsv>.failures`。
 4. **reduce + 质检**：读各 OUTFILE；读 `<tsv>.failures`；用一个 **Sol xhigh** reduce：(a) 逐条审计每份子结果而非盲拼；(b) 比对双跑对；(c) 对存疑的重跑/升档。写类子任务还要跑测试 / `git diff` 校验后才采信。最后交付。
+
+### 轻任务合并（batch exec）
+
+当拆解出的子任务满足以下**全部**条件时，**合并成一个 exec 行**，只付一次启动税：
+
+- 子任务数 2–4 个
+- 每个子任务预估 < 15s（简单提取/格式化/单文件小改）
+- 子任务之间无依赖（合并后在一个 prompt 里串行做，顺序无关）
+- 输出写到不同文件（无写冲突）
+
+合并 prompt 模板：`"请依次完成以下 N 个独立任务，每个任务的结果写到指定文件：任务 1: … → file1；任务 2: … → file2 …"`。tsv 里只写一行，VERIFY_CMD 检查所有输出文件。
+
+**收益**：把 2–4 次启动税压缩成 1 次，轻任务场景提速 40–70%。
+
+### DAG 依赖调度（col 9: DEPENDS_ON）
+
+默认 wave barrier 等**整个上一波**完成才启动下一波——如果上一波有一个慢任务（木桶效应），快任务的下游就被白等。
+
+`DEPENDS_ON` 列让任务**绕过 wave barrier**，只等自己声明的依赖文件出现：
+
+```tsv
+1	gpt-5.6-luna	medium	.	a.txt		提取 A 的 schema
+1	gpt-5.6-luna	medium	.	b.txt		提取 B 的 schema
+1	gpt-5.6-sol	high	.	c.txt		分析 C（耗时 3 分钟）
+2	gpt-5.6-sol	high	.	d.txt		合并 A+B 的结果	a.txt,b.txt
+```
+
+上例中 `d.txt` 只依赖 `a.txt,b.txt`——a/b 10s 完成后 d 立刻启动，**不用等 c 的 3 分钟**。
+
+实现：dispatcher 用 `wait $wave_pids`（只等当前波次的 PID）替代 `wait`（等所有子进程），DAG 任务的 PID 记入 `dag_pids`，最终一起 wait。
+
+### 投机 failover（speculative failover，opt-in）
+
+默认失败升档是**串行**的：Luna 跑完 → verify 失败 → 才启动 Sol。总时延 = Luna + Sol。
+
+设 `SPECULATIVE_FAILOVER=1` 后，Luna 启动的同时延迟 `SPECULATIVE_DELAY`（默认 30s）启动 Sol shadow：
+
+- Luna verify 通过 → 杀掉 shadow（省资源）
+- Luna 失败 → shadow 已在跑，总时延 ≈ max(Luna, delay+Sol) 而非 Luna+Sol
+
+```bash
+SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=20 ./scripts/dispatch.sh tasks.tsv
+```
+
+**代价**：每次 Luna 任务多付一次 Sol 的启动税+部分执行时间。仅对时延敏感的高风险任务开启。
+
+### 跳过插件加载（EXTRA_EXEC_FLAGS，实验性）
+
+`codex exec` 每次启动都加载 config.toml 里的所有 plugin（documents/spreadsheets/browser-use/computer-use 等 8 个）和 MCP 连接——这是启动税的大头之一。
+
+```bash
+EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" ./scripts/dispatch.sh tasks.tsv
+```
+
+`--ignore-user-config` 跳过 config.toml 加载（auth 不受影响，`-m` 已显式指定模型）。`--ignore-rules` 跳过 execpolicy 规则文件。**先单独测一个 exec 确认不报错再用**——某些工作目录可能需要 trust_level 配置。
 
 ## 子 agent 行为纪律（写进每个子 prompt，借鉴 codex-team-mode）
 
@@ -93,7 +149,7 @@ metadata:
 - **partial verdict**：到 `Stop when` 立即返回**可用的部分结论**，不沉默超时、不为"做完"而编造。
 - **不可替换目标**：不得用一个更简单的 proxy 偷换请求的产品目标，只因为它更好测。
 - **Reviewer 独立性**：若子任务是审查，用全新上下文，**不告诉它之前的辩论/作者/怀疑点/期望结论**，最多给"一个具体未解决风险 + 精确证据 + 已通过检查 + 不要重复"。
-- **不派生后代 / 不读 skill 指令**：子 agent **不得**再 spawn 子进程、**不得**加载本 skill 解释其指令；它只做本子任务的 task work。这条由 dispatch.sh 注入的 GUARD 行强制。
+- **不派生后代 / 不读 skill 指令**：子 agent **不得**再 spawn 子进程、**不得**加载本 skill 解释其指令；它只做本子任务的 task work。这条由 dispatch.sh 注入的精简 GUARD（3 条规则，~80 词）强制——比长 GUARD 减少注意力稀释，提高首次成功率，间接降低 failover 触发频率。
 
 ## 协调纪律（smallest-useful-set + 算协调成本）
 

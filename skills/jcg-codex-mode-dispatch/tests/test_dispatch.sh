@@ -41,7 +41,7 @@ done
 last="${raw[${#raw[@]}-1]}"
 body="${last%%$'\n\n---'*}"
 if [[ "$model" == *luna* && "$body" == *FAIL_LUNA* ]]; then : > "$out"; exit 0; fi
-if [[ "$body" == *SLEEP1* ]]; then sleep 1; fi
+case "$body" in *SLEEP3*) sleep 3;; *SLEEP2*) sleep 2;; *SLEEP1*) sleep 1;; esac
 d="$(dirname "$out")"
 if [[ "$body" == *MARK2* ]]; then
   if [ -f "$d/w1a.txt" ] && [ -f "$d/w1b.txt" ]; then echo "W1_DONE=yes $body" > "$out"
@@ -118,6 +118,28 @@ parallel=$(python3 -c "print($t1-$t0)")
 faster=$(python3 -c "print('yes' if ($serial-$parallel) > 0.4 else 'no')")
 if [ "$faster" = yes ]; then ok "serial=${serial}s parallel=${parallel}s"
 else bad "serial=${serial}s parallel=${parallel}s (cap not enforced?)"; fi
+
+# ---- T7: DAG deps bypass wave barrier -----------------------------------
+echo "[T7] DAG: task with DEPENDS_ON starts before unrelated wave-1 tasks finish"
+d="$WORK/c7"; mkdir -p "$d"
+# A sleeps 2s, B is fast; D depends only on b.txt and verifies a.txt absent
+printf '1\tgpt-5.6-luna\tlow\t%s\ta.txt\t\tSLEEP3 A_work\n' "$d" >  "$d/t.tsv"
+printf '1\tgpt-5.6-luna\tlow\t%s\tb.txt\t\tB_work\n' "$d"      >> "$d/t.tsv"
+printf '2\tgpt-5.6-sol\tlow\t%s\td.txt\ttest ! -s a.txt\tD_work\t\tb.txt\n' "$d" >> "$d/t.tsv"
+( cd "$d" && MAX_CONCURRENCY=3 "$DISPATCH" ./t.tsv >/dev/null 2>&1 )
+rc=$?
+if [ "$rc" = 0 ] && [ -s "$d/d.txt" ]; then ok "DAG dep satisfied, a.txt was absent when D ran"
+else bad "rc=$rc d=$(cat "$d/d.txt" 2>/dev/null) failures=$(cat "$d/t.tsv.failures" 2>/dev/null)"; fi
+
+# ---- T8: speculative failover (opt-in) -----------------------------------
+echo "[T8] speculative failover: Luna fail + Sol shadow -> recovered"
+d="$WORK/c8"; mkdir -p "$d"
+printf '1\tgpt-5.6-luna\tlow\t%s\to.txt\tgrep -q please "$OUT"\tFAIL_LUNA please\n' "$d" > "$d/t.tsv"
+( cd "$d" && MAX_CONCURRENCY=2 SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=1 "$DISPATCH" ./t.tsv >/dev/null 2>&1 )
+rc=$?
+if [ "$rc" = 0 ] && [ -s "$d/o.txt" ] && grep -q 'spec-failover' "$d/o.txt.err" 2>/dev/null; then
+  ok "speculative shadow recovered"
+else bad "rc=$rc out=$(cat "$d/o.txt" 2>/dev/null) err=$(grep -c 'spec-failover' "$d/o.txt.err" 2>/dev/null)"; fi
 
 echo
 echo "dispatch tests: $PASS passed, $FAIL failed"

@@ -64,6 +64,21 @@ class JcgCodexModeDispatchContractTests(unittest.TestCase):
         self.assertIn("绝不", SKILL)  # never delegate reading skill to subagent
         self.assertIn("GUARD", SKILL)
         self.assertIn("fork_turns", SKILL)
+        self.assertIn("精简 GUARD", SKILL)  # slim GUARD documented
+
+    def test_perf_optimizations_documented(self) -> None:
+        # batch exec (merge light tasks into one exec)
+        self.assertIn("轻任务合并", SKILL)
+        self.assertIn("batch exec", SKILL)
+        # DAG dependency scheduling
+        self.assertIn("DEPENDS_ON", SKILL)
+        self.assertIn("DAG", SKILL)
+        # speculative failover
+        self.assertIn("投机 failover", SKILL)
+        self.assertIn("SPECULATIVE_FAILOVER", SKILL)
+        # extra exec flags (skip plugin loading)
+        self.assertIn("EXTRA_EXEC_FLAGS", SKILL)
+        self.assertIn("ignore-user-config", SKILL)
 
     def test_switches_documented(self) -> None:
         self.assertIn("disable-model-invocation: true", SKILL)
