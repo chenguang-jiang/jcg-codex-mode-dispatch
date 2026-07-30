@@ -101,10 +101,11 @@ class JcgCodexModeDispatchContractTests(unittest.TestCase):
         ci = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
         self.assertIn("test_skill_contract.py", ci)
         self.assertIn("test_dispatch.sh", ci)
-        banner = (REPO_ROOT / "assets" / "readme" / "banner.svg").read_text(encoding="utf-8")
-        self.assertIn("<svg", banner)
-        self.assertIn("dispatch.sh", banner)
+        hero = (REPO_ROOT / "assets" / "readme" / "hero.svg").read_text(encoding="utf-8")
+        self.assertIn("<svg", hero)
+        self.assertIn("dispatch.sh", hero)
+        self.assertIn("jcg-codex-mode-dispatch", hero)
 
 
 if __name__ == "__main__":
-    sys.exit(unittest.main(verbosity=2, exit=False))
+    unittest.main(verbosity=2)
