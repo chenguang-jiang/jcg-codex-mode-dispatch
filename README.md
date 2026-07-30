@@ -17,6 +17,18 @@
 
 ---
 
+## Highlights
+
+| | Feature | Detail |
+|---|---|---|
+| 🎯 | **Accuracy-first routing** | Luna *only* for machine-verifiable output; everything else defaults to Sol. Unsure → Sol or dual-run. Never sacrifice correctness for speed. |
+| 🚦 | **Hard startup gate** | Each `codex exec` pays ~35–45s startup tax. A mandatory 3-question self-check blocks dispatch unless ≥3 independent non-trivial subtasks exist. Small tasks stay in the main thread. |
+| 🛡️ | **Triple safety net** | ① Fail-closed: empty/illegal model → `exit 2`, no silent fallback. ② Failover: Luna fails → automatic Sol/high rerun. ③ Dual-run: two models, one subtask, compared at reduce. |
+| ⚡ | **Perf optimizations** | DAG deps bypass wave barrier (no bucket effect) · speculative failover (Sol shadow pre-launched) · batch exec (merge 2–4 light tasks → 1 startup tax) · `EXTRA_EXEC_FLAGS` to skip plugin loading. |
+| 🧪 | **22 tests, zero cost** | 14 contract + 8 behavior tests in CI on every push. Behavior tests use a fake `codex` stub — no network, no model calls, no money. |
+| 🐚 | **Pure bash 3.2** | Zero dependencies beyond `codex exec`. Fifo token pool uses `read -n1 -u 9` (no `wait -n`). Runs on stock macOS bash and CI Linux. |
+| 🔒 | **Hidden by default** | `disable-model-invocation: true` — the model never auto-triggers this skill. You decide when parallelism is worth the tax. |
+
 ## Proof
 
 | Suite | Tests | What it guards |
