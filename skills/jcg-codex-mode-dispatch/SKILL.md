@@ -73,25 +73,57 @@ metadata:
 ### 并行新定位
 准确优先下，并行主要用来**跑双跑 / 多校验 / 多视角**而不爆墙钟，提速是副产品。
 
-## 工作流（四步）
+## 工作流（五步）
 
-1. **先过启动门槛**（见上文）：子任务<3 或有任一能主线程秒答 → **不启动 dispatch，直接主线程做**，并告知用户。通过后才进入拆解：把任务拆成独立子任务（无共享可变状态）；画依赖、分 WAVE（波内并行、波间串行）；标 stakes 与可校验性。预期 < ~60 秒的碎活**合并**，别单独 spawn（37s 启动税不值）。
-2. **指派**：按路由表给每个子任务定 model + effort + VERIFY_CMD，写 `tasks.tsv`：
-   列 = `WAVE<TAB>MODEL<TAB>EFFORT<TAB>WORKDIR<TAB>OUTFILE<TAB>VERIFY_CMD<TAB>PROMPT[<TAB>SANDBOX[<TAB>DEPENDS_ON]]`
-   - `VERIFY_CMD` 可空；其内部可用 `$OUT`（= OUTFILE 路径）。
-   - `SANDBOX` 可空（默认 `read-only`）；**写类子任务**（生成/改文件）填 `workspace-write`。
-   - `DEPENDS_ON` 可空；逗号分隔的 OUTFILE 路径——有此列的任务**绕过 wave barrier**，改为轮询等待依赖文件出现后立刻启动（DAG 模式，见下文）。
-   - 双跑：同一子任务写两行（不同 MODEL/OUTFILE）。
-3. **派发**：先确定本 SKILL.md 的 parent 目录（即 skill 目录），然后执行：
-   ```bash
-   SKILL_DIR="$(cd "$(dirname "<本SKILL.md的绝对路径>")" && pwd)"
-   bash "$SKILL_DIR/scripts/dispatch.sh" tasks.tsv
-   ```
-   **不要用 `./scripts/dispatch.sh`**——`./` 是 CWD 相对路径，CWD 通常不是 skill 目录。
-   例如 symlink 安装后 `SKILL_DIR` 通常是 `~/.codex/skills/jcg-codex-mode-dispatch`。
-   `MAX_CONCURRENCY` 默认 4，无 429 再加。
-   dispatch.sh：按波并行、DAG 依赖调度、并发上限（fifo 令牌池，bash 3.2 兼容，**不用 `wait -n`**）、单任务超时（gtimeout/timeout 自动探测，无则跳过）、跑每个 VERIFY_CMD、Luna→Sol 失败升档、投机 failover（opt-in）、写 `<tsv>.failures`。
-4. **reduce + 质检**：读各 OUTFILE；读 `<tsv>.failures`；用一个 **Sol xhigh** reduce：(a) 逐条审计每份子结果而非盲拼；(b) 比对双跑对；(c) 对存疑的重跑/升档。写类子任务还要跑测试 / `git diff` 校验后才采信。最后交付。
+### Step 0：环境准备（每次会话执行一次）
+
+执行下面的 bash 代码块。它会定位已有的 dispatch.sh，或在找不到时提示从本 SKILL.md 末尾的 **附录 A** 提取脚本。**直接复制执行，不需要修改任何路径。**
+
+```bash
+DISPATCH=""
+for d in "$HOME/.codex/skills/jcg-codex-mode-dispatch" "$HOME/.agents/skills/jcg-codex-mode-dispatch"; do
+  [ -f "$d/scripts/dispatch.sh" ] && DISPATCH="$d/scripts/dispatch.sh" && break
+done
+if [ -z "$DISPATCH" ]; then
+  DISPATCH="/tmp/jcg-dispatch.sh"
+  echo "[dispatch] 已知路径未找到，请从本 SKILL.md 附录 A 提取脚本"
+  echo "[dispatch] 用 write 工具将附录 A 的 bash 代码写入 $DISPATCH，然后 chmod +x $DISPATCH"
+fi
+echo "DISPATCH=$DISPATCH"
+```
+
+如果输出提示"从附录 A 提取"，则：
+1. 滚动到本 SKILL.md 最末尾的 `## 附录 A：dispatch.sh 完整源码`
+2. 用 `write` 工具将 ` ```bash ` 和 ` ``` ` 之间的全部内容写入 `$DISPATCH` 路径
+3. 执行 `chmod +x "$DISPATCH"`
+
+后续所有步骤用 `$DISPATCH` 变量引用脚本。
+
+### Step 1：过启动门槛
+
+子任务<3 或有任一能主线程秒答 → **不启动 dispatch，直接主线程做**，并告知用户。通过后才进入拆解：把任务拆成独立子任务（无共享可变状态）；画依赖、分 WAVE（波内并行、波间串行）；标 stakes 与可校验性。预期 < ~60 秒的碎活**合并**，别单独 spawn（37s 启动税不值）。
+
+### Step 2：写 tasks.tsv
+
+按路由表给每个子任务定 model + effort + VERIFY_CMD，写 `tasks.tsv`：
+列 = `WAVE<TAB>MODEL<TAB>EFFORT<TAB>WORKDIR<TAB>OUTFILE<TAB>VERIFY_CMD<TAB>PROMPT[<TAB>SANDBOX[<TAB>DEPENDS_ON]]`
+- `VERIFY_CMD` 可空；其内部可用 `$OUT`（= OUTFILE 路径）。
+- `SANDBOX` 可空（默认 `read-only`）；**写类子任务**（生成/改文件）填 `workspace-write`。
+- `DEPENDS_ON` 可空；逗号分隔的 OUTFILE 路径——有此列的任务**绕过 wave barrier**，改为轮询等待依赖文件出现后立刻启动（DAG 模式，见下文）。
+- 双跑：同一子任务写两行（不同 MODEL/OUTFILE）。
+
+### Step 3：派发
+
+```bash
+bash "$DISPATCH" tasks.tsv
+```
+
+`MAX_CONCURRENCY` 默认 4，无 429 再加。
+dispatch.sh：按波并行、DAG 依赖调度、并发上限（fifo 令牌池，bash 3.2 兼容，**不用 `wait -n`**）、单任务超时（gtimeout/timeout 自动探测，无则跳过）、跑每个 VERIFY_CMD、Luna→Sol 失败升档、投机 failover（opt-in）、写 `<tsv>.failures`。
+
+### Step 4：reduce + 质检
+
+读各 OUTFILE；读 `<tsv>.failures`；用一个 **Sol xhigh** reduce：(a) 逐条审计每份子结果而非盲拼；(b) 比对双跑对；(c) 对存疑的重跑/升档。写类子任务还要跑测试 / `git diff` 校验后才采信。最后交付。
 
 ### 轻任务合并（batch exec）
 
@@ -133,7 +165,7 @@ metadata:
 - Luna 失败 → shadow 已在跑，总时延 ≈ max(Luna, delay+Sol) 而非 Luna+Sol
 
 ```bash
-SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=20 bash "$SKILL_DIR/scripts/dispatch.sh" tasks.tsv
+SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=20 bash "$DISPATCH" tasks.tsv
 ```
 
 **代价**：每次 Luna 任务多付一次 Sol 的启动税+部分执行时间。仅对时延敏感的高风险任务开启。
@@ -143,7 +175,7 @@ SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=20 bash "$SKILL_DIR/scripts/dispatch.sh
 `codex exec` 每次启动都加载 config.toml 里的所有 plugin（documents/spreadsheets/browser-use/computer-use 等 8 个）和 MCP 连接——这是启动税的大头之一。
 
 ```bash
-EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" bash "$SKILL_DIR/scripts/dispatch.sh" tasks.tsv
+EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" bash "$DISPATCH" tasks.tsv
 ```
 
 `--ignore-user-config` 跳过 config.toml 加载（auth 不受影响，`-m` 已显式指定模型）。`--ignore-rules` 跳过 execpolicy 规则文件。**先单独测一个 exec 确认不报错再用**——某些工作目录可能需要 trust_level 配置。
@@ -175,7 +207,7 @@ EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" bash "$SKILL_DIR/scripts/
 ## Codex skill 合规
 
 - 本 SKILL.md 及引用文件**由主 agent 自己读**，**绝不**把"读/解释 skill 指令"委派给子 agent（子 agent 只做 task work）。
-- **路径解析铁律**：本 skill 的所有脚本（`scripts/dispatch.sh` 等）位于 SKILL.md 所在目录的 `scripts/` 子目录。调用时必须用 SKILL.md parent 目录的绝对路径拼接，**绝不用 `./` 相对路径**（CWD 通常不是 skill 目录）。先 `SKILL_DIR="$(cd "$(dirname "<SKILL.md绝对路径>")" && pwd)"` 再 `bash "$SKILL_DIR/scripts/dispatch.sh"`。
+- **脚本定位铁律**：dispatch.sh 通过 Step 0 的 `$DISPATCH` 变量定位。**绝不用 `./scripts/dispatch.sh`**（CWD 相对路径），**绝不猜测路径**。Step 0 代码块会尝试已知安装路径，失败则从本文件附录 A 提取。如果 sandbox 阻止读取 `~/.codex/skills/` 下的文件，附录 A 保证脚本始终可用。
 - 子 agent 的 prompt 必须**自包含**，并以 dispatch.sh 注入的 GUARD 行结尾。
 
 ## 开关（你决定是否使用）
@@ -183,3 +215,200 @@ EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" bash "$SKILL_DIR/scripts/
 - **默认隐藏**（`disable-model-invocation: true`）：模型平时看不见本 skill，**绝不自动用**。触发：`/skill:jcg-codex-mode-dispatch` 或在 prompt 里点名。
 - 想让模型也能自动建议 → 删掉 frontmatter 那行（description 仍约束触发，不推荐）。
 - **硬关**：目录改名加 `.disabled`（如 `mv jcg-codex-mode-dispatch jcg-codex-mode-dispatch.disabled`，可逆）；或启动 `codex --no-skills`（关全部）；或移到项目级 `.codex/skills/` 按项目开关。
+
+---
+
+## 附录 A：dispatch.sh 完整源码
+
+> **用途**：当 Step 0 的已知路径查找失败时（sandbox 限制、symlink 断裂等），
+> 用 `write` 工具将下方 ` ```bash ` 和 ` ``` ` 之间的**全部内容**写入 `/tmp/jcg-dispatch.sh`，
+> 然后 `chmod +x /tmp/jcg-dispatch.sh`，再 `bash /tmp/jcg-dispatch.sh tasks.tsv`。
+
+```bash
+#!/usr/bin/env bash
+# jcg-codex-mode-dispatch dispatcher.
+# Usage: [ENV VARS] dispatch.sh <tasks.tsv>
+#
+# tsv columns (TAB-separated, 8 or 9):
+#   WAVE  MODEL  EFFORT  WORKDIR  OUTFILE  VERIFY_CMD  PROMPT  [SANDBOX]  [DEPENDS_ON]
+#   SANDBOX    optional: 'read-only'(default) | 'workspace-write'
+#   DEPENDS_ON optional: comma-separated OUTFILE paths this task waits for (DAG mode)
+#
+# Environment variables:
+#   MAX_CONCURRENCY       fifo token pool size (default 4)
+#   SPECULATIVE_FAILOVER  1 = start Sol shadow N seconds after Luna (default 0)
+#   SPECULATIVE_DELAY     seconds before shadow launch (default 30)
+#   EXTRA_EXEC_FLAGS      extra flags appended to every `codex exec` call
+#                         e.g. "--ignore-user-config --ignore-rules" to skip
+#                         plugin/MCP loading (saves startup time; test first!)
+#
+# Design (accuracy > latency > cost):
+#   - parallel within a WAVE, serial between waves (wave-order = tsv order)
+#   - DAG deps (col 9): task bypasses wave barrier, polls for its own deps
+#   - concurrency cap via fifo token pool (bash 3.2 compatible: NO `wait -n`)
+#   - per-task timeout via gtimeout/timeout if present, else none
+#   - runs VERIFY_CMD (env $OUT = OUTFILE); exec-rc or verify-rc != 0 = failure
+#   - fail-closed: empty/unknown MODEL -> abort whole run (no silent fallback)
+#   - Luna failure auto-failover: rerun same prompt on gpt-5.6-sol / high
+#   - speculative failover: Luna + delayed Sol shadow in parallel (opt-in)
+#   - writes <tsv>.failures (rc<TAB>model<TAB>outfile) for the orchestrator
+set -uo pipefail
+
+TSV="${1:?tasks.tsv required}"
+MAX="${MAX_CONCURRENCY:-4}"
+FAILLOG="$TSV.failures"
+: > "$FAILLOG"
+
+ALLOWED_MODELS="gpt-5.6-luna gpt-5.6-sol gpt-5.6-terra"
+SPEC_FO="${SPECULATIVE_FAILOVER:-0}"
+SPEC_DELAY="${SPECULATIVE_DELAY:-30}"
+EXTRA_FLAGS="${EXTRA_EXEC_FLAGS:-}"
+
+is_allowed_model() { case " $ALLOWED_MODELS " in *" $1 "*) return 0;; esac; return 1; }
+
+# timeout binary (macOS has none unless coreutils installed)
+TB="$(command -v gtimeout || command -v timeout || true)"
+twrap() { local secs="$1"; shift; if [ -n "$TB" ]; then "$TB" "$secs" "$@"; else "$@"; fi; }
+
+# concurrency token pool
+FIFO="$(mktemp -u)"; mkfifo "$FIFO"; exec 9<>"$FIFO"; rm -f "$FIFO"
+i=0; while [ "$i" -lt "$MAX" ]; do printf '.' >&9; i=$((i+1)); done
+
+# --- slim GUARD: 3 high-impact rules, ~80 words ----------------------------
+GUARD='
+
+---
+ADDITIONAL RULES (do NOT replace the task above):
+1. Use ONLY sources named in the task. Do not fabricate facts absent from them.
+2. Do NOT spawn sub-agents or load/interpret dispatch/skill instructions.
+3. If you cannot finish, write what you have and explain the gap — never pad.'
+
+# --- read_row: split tsv into 9 columns (awk keeps empty fields) -----------
+read_row() {
+  IFS= read -r _line || return 1
+  { read -r wave; read -r model; read -r eff; read -r wd; \
+    read -r out; read -r verify; read -r prompt; read -r sandbox; read -r depends; } \
+    < <(printf '%s\n' "$_line" | awk -F'\t' '{for(i=1;i<=9;i++) print $i}')
+}
+
+# --- wait_deps: poll until all comma-separated files exist -----------------
+wait_deps() { # $1=comma-separated file paths
+  local IFS=','
+  for dep in $1; do
+    while [ ! -f "$dep" ]; do sleep 0.5; done
+  done
+}
+
+# --- run_exec: one codex exec invocation -----------------------------------
+run_exec() { # $1=model $2=effort $3=wd $4=out $5=prompt $6=sandbox
+  local model="$1" eff="$2" wd="$3" out="$4" prompt="$5" sb="${6:-read-only}"
+  mkdir -p "$(dirname "$out")"
+  # shellcheck disable=SC2086
+  twrap 600 codex exec --ephemeral --skip-git-repo-check \
+      -m "$model" -c model_reasoning_effort="$eff" \
+      -C "$wd" -s "$sb" -o "$out" $EXTRA_FLAGS "$prompt$GUARD" \
+      >>"$out.log" 2>>"$out.err" || true
+}
+
+# --- run_one: exec + verify + failover (+ optional speculative) ------------
+run_one() { # $1=model $2=eff $3=wd $4=out $5=verify $6=prompt $7=sandbox
+  local model="$1" eff="$2" wd="$3" out="$4" verify="$5" prompt="$6" sb="${7:-read-only}"
+  local rc=0 vrc=0 shadow_pid=""
+  mkdir -p "$(dirname "$out")"; : > "$out"; : > "$out.log"; : > "$out.err"
+
+  # speculative failover: launch Sol shadow after delay (opt-in, Luna only)
+  if [ "$SPEC_FO" = 1 ] && [[ "$model" == *luna* ]]; then
+    ( sleep "$SPEC_DELAY" && run_exec gpt-5.6-sol high "$wd" "$out.spec" "$prompt" workspace-write ) &
+    shadow_pid=$!
+  fi
+
+  run_exec "$model" "$eff" "$wd" "$out" "$prompt" "$sb"
+  rc=0; [ -s "$out" ] || rc=1
+  if [ "$rc" = 0 ] && [ -n "$verify" ]; then
+    ( cd "$wd" && OUT="$out" bash -c "$verify" ) >/dev/null 2>>"$out.err" || vrc=$?
+  fi
+
+  if [ "$rc" = 0 ] && [ "$vrc" = 0 ]; then
+    # success — kill speculative shadow if running
+    [ -n "$shadow_pid" ] && kill "$shadow_pid" 2>/dev/null
+  else
+    # failure path
+    if [ -n "$shadow_pid" ]; then
+      # speculative shadow already running — wait for it instead of serial failover
+      echo "[spec-failover] $out  waiting for Sol shadow (pid=$shadow_pid)" >>"$out.err"
+      wait "$shadow_pid" 2>/dev/null
+      if [ -s "$out.spec" ]; then
+        cp "$out.spec" "$out"
+        rc=0; vrc=0
+        if [ -n "$verify" ]; then
+          ( cd "$wd" && OUT="$out" bash -c "$verify" ) >/dev/null 2>>"$out.err" || vrc=$?
+        fi
+      else
+        rc=1
+      fi
+      rm -f "$out.spec"
+    elif [[ "$model" == *luna* ]]; then
+      # serial failover (default)
+      echo "[failover] $out  $model(rc=$rc,verify=$vrc) -> gpt-5.6-sol/high" >>"$out.err"
+      rc=0; vrc=0
+      run_exec gpt-5.6-sol high "$wd" "$out" "$prompt" workspace-write
+      rc=0; [ -s "$out" ] || rc=1
+      if [ "$rc" = 0 ] && [ -n "$verify" ]; then
+        ( cd "$wd" && OUT="$out" bash -c "$verify" ) >/dev/null 2>>"$out.err" || vrc=$?
+      fi
+    fi
+  fi
+  rm -f "$out.spec"
+  echo "$((rc||vrc))" >"$out.rc"
+}
+
+# === fail-closed pre-check =================================================
+bad=0
+while read_row; do
+  [ -z "$wave" ] && continue
+  [ -z "$model" ] && { echo "[abort] empty MODEL in a row (WAVE=$wave OUT=$out)" >&2; bad=1; }
+  if ! is_allowed_model "$model"; then echo "[abort] unknown MODEL '$model' (allowed: $ALLOWED_MODELS)" >&2; bad=1; fi
+done < "$TSV"
+[ "$bad" = 1 ] && { echo "[abort] fail-closed: refusing to run with invalid model routing" >&2; exit 2; }
+
+# === run by wave + DAG deps ================================================
+prev=""
+wave_pids=""
+dag_pids=""
+while read_row; do
+  [ -z "$wave" ] && continue
+
+  if [ -n "$depends" ]; then
+    # DAG task: bypass wave barrier, poll for own deps
+    read -n1 -u 9
+    ( wait_deps "$depends"; run_one "$model" "$eff" "$wd" "$out" "$verify" "$prompt" "${sandbox:-read-only}"; printf '.' >&9 ) &
+    dag_pids="$dag_pids $!"
+  else
+    # wave task: barrier on wave transition (wait only wave PIDs, not DAG PIDs)
+    if [ -n "$prev" ] && [ "$wave" != "$prev" ]; then
+      [ -n "$wave_pids" ] && wait $wave_pids 2>/dev/null
+      wave_pids=""
+    fi
+    prev="$wave"
+    read -n1 -u 9
+    ( run_one "$model" "$eff" "$wd" "$out" "$verify" "$prompt" "${sandbox:-read-only}"; printf '.' >&9 ) &
+    wave_pids="$wave_pids $!"
+  fi
+done < "$TSV"
+# final wait: both wave and DAG tasks
+[ -n "$wave_pids" ] && wait $wave_pids 2>/dev/null
+[ -n "$dag_pids" ]  && wait $dag_pids  2>/dev/null
+
+# === collect failures =======================================================
+while read_row; do
+  [ -z "$wave" ] && continue
+  rc="$(cat "$out.rc" 2>/dev/null || echo missing)"
+  [ "$rc" != "0" ] && printf '%s\t%s\t%s\n' "$rc" "$model" "$out" >>"$FAILLOG"
+done < "$TSV"
+
+if [ -s "$FAILLOG" ]; then
+  echo "[dispatch] failures (rc<TAB>model<TAB>out):"; cat "$FAILLOG"
+  exit 1
+fi
+echo "[dispatch] all subtasks passed verification"
+```
