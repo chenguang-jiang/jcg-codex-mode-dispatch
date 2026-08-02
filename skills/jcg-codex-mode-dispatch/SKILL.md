@@ -82,7 +82,14 @@ metadata:
    - `SANDBOX` 可空（默认 `read-only`）；**写类子任务**（生成/改文件）填 `workspace-write`。
    - `DEPENDS_ON` 可空；逗号分隔的 OUTFILE 路径——有此列的任务**绕过 wave barrier**，改为轮询等待依赖文件出现后立刻启动（DAG 模式，见下文）。
    - 双跑：同一子任务写两行（不同 MODEL/OUTFILE）。
-3. **派发**：`./scripts/dispatch.sh ./tasks.tsv`（`MAX_CONCURRENCY` 默认 4，无 429 再加）。
+3. **派发**：先确定本 SKILL.md 的 parent 目录（即 skill 目录），然后执行：
+   ```bash
+   SKILL_DIR="$(cd "$(dirname "<本SKILL.md的绝对路径>")" && pwd)"
+   bash "$SKILL_DIR/scripts/dispatch.sh" tasks.tsv
+   ```
+   **不要用 `./scripts/dispatch.sh`**——`./` 是 CWD 相对路径，CWD 通常不是 skill 目录。
+   例如 symlink 安装后 `SKILL_DIR` 通常是 `~/.codex/skills/jcg-codex-mode-dispatch`。
+   `MAX_CONCURRENCY` 默认 4，无 429 再加。
    dispatch.sh：按波并行、DAG 依赖调度、并发上限（fifo 令牌池，bash 3.2 兼容，**不用 `wait -n`**）、单任务超时（gtimeout/timeout 自动探测，无则跳过）、跑每个 VERIFY_CMD、Luna→Sol 失败升档、投机 failover（opt-in）、写 `<tsv>.failures`。
 4. **reduce + 质检**：读各 OUTFILE；读 `<tsv>.failures`；用一个 **Sol xhigh** reduce：(a) 逐条审计每份子结果而非盲拼；(b) 比对双跑对；(c) 对存疑的重跑/升档。写类子任务还要跑测试 / `git diff` 校验后才采信。最后交付。
 
@@ -126,7 +133,7 @@ metadata:
 - Luna 失败 → shadow 已在跑，总时延 ≈ max(Luna, delay+Sol) 而非 Luna+Sol
 
 ```bash
-SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=20 ./scripts/dispatch.sh tasks.tsv
+SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=20 bash "$SKILL_DIR/scripts/dispatch.sh" tasks.tsv
 ```
 
 **代价**：每次 Luna 任务多付一次 Sol 的启动税+部分执行时间。仅对时延敏感的高风险任务开启。
@@ -136,7 +143,7 @@ SPECULATIVE_FAILOVER=1 SPECULATIVE_DELAY=20 ./scripts/dispatch.sh tasks.tsv
 `codex exec` 每次启动都加载 config.toml 里的所有 plugin（documents/spreadsheets/browser-use/computer-use 等 8 个）和 MCP 连接——这是启动税的大头之一。
 
 ```bash
-EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" ./scripts/dispatch.sh tasks.tsv
+EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" bash "$SKILL_DIR/scripts/dispatch.sh" tasks.tsv
 ```
 
 `--ignore-user-config` 跳过 config.toml 加载（auth 不受影响，`-m` 已显式指定模型）。`--ignore-rules` 跳过 execpolicy 规则文件。**先单独测一个 exec 确认不报错再用**——某些工作目录可能需要 trust_level 配置。
@@ -161,14 +168,14 @@ EXTRA_EXEC_FLAGS="--ignore-user-config --ignore-rules" ./scripts/dispatch.sh tas
 
 ## 查看用量（可选诊断）
 
-```bash
-python3 ~/.codex/skills/jcg-codex-mode-dispatch/scripts/usage_by_model.py --days 1
-```
-> 注意：`codex exec --ephemeral` 子任务可能**不写** sessions trace，用量统计以主线程与非 ephemeral 为准；仅作参考。准确优先下成本是第三优先级。
+> 注：`codex exec --ephemeral` 子任务可能**不写** sessions trace，用量统计以主线程与非 ephemeral 为准；仅作参考。准确优先下成本是第三优先级。
+>
+> 如需查看用量，可用 `codex sessions list` 或检查 `~/.codex/sessions/` 目录。
 
 ## Codex skill 合规
 
-- 本 SKILL.md 及引用文件**由主 agent 自己读**，**绝不**把"读/解释 skill 指令"委派给子 agent（子 agent 只做 task work）。脚用相对路径 `./scripts/dispatch.sh` 调，不发明本地绝对路径。
+- 本 SKILL.md 及引用文件**由主 agent 自己读**，**绝不**把"读/解释 skill 指令"委派给子 agent（子 agent 只做 task work）。
+- **路径解析铁律**：本 skill 的所有脚本（`scripts/dispatch.sh` 等）位于 SKILL.md 所在目录的 `scripts/` 子目录。调用时必须用 SKILL.md parent 目录的绝对路径拼接，**绝不用 `./` 相对路径**（CWD 通常不是 skill 目录）。先 `SKILL_DIR="$(cd "$(dirname "<SKILL.md绝对路径>")" && pwd)"` 再 `bash "$SKILL_DIR/scripts/dispatch.sh"`。
 - 子 agent 的 prompt 必须**自包含**，并以 dispatch.sh 注入的 GUARD 行结尾。
 
 ## 开关（你决定是否使用）
